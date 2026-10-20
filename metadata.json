@@ -1,0 +1,6 @@
+{
+  "name": "ThaiLearn Hub — คลังปัญญาและการแบ่งปันสื่อการเรียนรู้",
+  "description": "เว็บไซต์รวบรวมและแบ่งปันความรู้ สื่อการสอน และเอกสารวิชาการสำหรับนักเรียน นักศึกษา และครูผู้สอน",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

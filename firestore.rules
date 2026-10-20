@@ -1,0 +1,421 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // Global Hardened Primitives
+    // =========================================================================
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 't.gan5140@gmail.com';
+    }
+
+    function isActiveUser() {
+      return isVerifiedUser() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isVerifiedUser() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active' &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
+    }
+
+    function isStaff() {
+      return isBootstrappedAdmin() || (
+        isVerifiedUser() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active' &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'moderator']
+      );
+    }
+
+    // =========================================================================
+    // Validation Blueprints (Anti-Update-Gap)
+    // =========================================================================
+    function isValidUser(data) {
+      return data.keys().hasAll([
+          'uid', 'displayName', 'email', 'role', 'status',
+          'photoURL', 'bio', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid', 'displayName', 'email', 'role', 'status',
+          'photoURL', 'bio', 'createdAt', 'updatedAt'
+        ]) &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        data.role is string && data.role in ['member', 'moderator', 'admin'] &&
+        data.status is string && data.status in ['active', 'suspended'] &&
+        data.photoURL is string && data.photoURL.size() <= 1000 &&
+        data.bio is string && data.bio.size() <= 500 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidResource(data) {
+      return data.keys().hasAll([
+          'title', 'description', 'category', 'level', 'mediaType',
+          'resourceUrl', 'fileName', 'fileSize', 'fileDataUrl', 'tags',
+          'authorId', 'authorName', 'visibility', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'title', 'description', 'category', 'level', 'mediaType',
+          'resourceUrl', 'fileName', 'fileSize', 'fileDataUrl', 'tags',
+          'authorId', 'authorName', 'visibility', 'createdAt', 'updatedAt'
+        ]) &&
+        data.title is string && data.title.size() >= 3 && data.title.size() <= 200 &&
+        data.description is string && data.description.size() >= 10 && data.description.size() <= 4000 &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 80 &&
+        data.level is string && data.level in [
+          'ประถมศึกษา', 'มัธยมศึกษาตอนต้น', 'มัธยมศึกษาตอนปลาย',
+          'อาชีวศึกษา', 'อุดมศึกษา', 'บุคคลทั่วไป'
+        ] &&
+        data.mediaType is string && data.mediaType in ['pdf', 'video', 'website', 'document', 'presentation'] &&
+        data.resourceUrl is string && data.resourceUrl.size() <= 2000 &&
+        data.fileName is string && data.fileName.size() <= 255 &&
+        data.fileSize is int && data.fileSize >= 0 && data.fileSize <= 52428800 &&
+        data.fileDataUrl is string && data.fileDataUrl.size() <= 700000 &&
+        (data.resourceUrl.size() > 0 || data.fileDataUrl.size() > 0) &&
+        data.tags is list && data.tags.size() <= 10 &&
+        (data.tags.size() == 0 || (data.tags[0] is string && data.tags[0].size() >= 1 && data.tags[0].size() <= 40)) &&
+        data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 && data.authorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 100 &&
+        data.visibility is string && data.visibility in ['public', 'hidden'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidFavorite(data) {
+      return data.keys().hasAll([
+          'userId', 'resourceId', 'resourceTitle',
+          'resourceCategory', 'resourceMediaType', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId', 'resourceId', 'resourceTitle',
+          'resourceCategory', 'resourceMediaType', 'createdAt'
+        ]) &&
+        data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 && data.userId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.resourceId is string && data.resourceId.size() >= 1 && data.resourceId.size() <= 128 && data.resourceId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.resourceTitle is string && data.resourceTitle.size() >= 1 && data.resourceTitle.size() <= 200 &&
+        data.resourceCategory is string && data.resourceCategory.size() >= 1 && data.resourceCategory.size() <= 80 &&
+        data.resourceMediaType is string && data.resourceMediaType in ['pdf', 'video', 'website', 'document', 'presentation'] &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidReport(data) {
+      return data.keys().hasAll([
+          'resourceId', 'resourceTitle', 'reporterId', 'reporterName',
+          'reason', 'details', 'status', 'resolutionNote', 'resolvedBy',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'resourceId', 'resourceTitle', 'reporterId', 'reporterName',
+          'reason', 'details', 'status', 'resolutionNote', 'resolvedBy',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.resourceId is string && data.resourceId.size() >= 1 && data.resourceId.size() <= 128 && data.resourceId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.resourceTitle is string && data.resourceTitle.size() >= 1 && data.resourceTitle.size() <= 200 &&
+        data.reporterId is string && data.reporterId.size() >= 1 && data.reporterId.size() <= 128 && data.reporterId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.reporterName is string && data.reporterName.size() >= 1 && data.reporterName.size() <= 100 &&
+        data.reason is string && data.reason in ['broken_link', 'copyright', 'inappropriate', 'inaccurate', 'spam'] &&
+        data.details is string && data.details.size() >= 5 && data.details.size() <= 1000 &&
+        data.status is string && data.status in ['pending', 'resolved', 'dismissed'] &&
+        data.resolutionNote is string && data.resolutionNote.size() <= 1000 &&
+        data.resolvedBy is string && data.resolvedBy.size() <= 128 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidModerationLog(data) {
+      return data.keys().hasAll([
+          'actorId', 'actorName', 'actionType',
+          'targetId', 'targetLabel', 'note', 'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'actorId', 'actorName', 'actionType',
+          'targetId', 'targetLabel', 'note', 'createdAt'
+        ]) &&
+        data.actorId is string && data.actorId.size() >= 1 && data.actorId.size() <= 128 && data.actorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 100 &&
+        data.actionType is string && data.actionType in [
+          'hide_resource', 'restore_resource', 'delete_resource',
+          'resolve_report', 'dismiss_report', 'suspend_user',
+          'activate_user', 'change_role', 'update_settings'
+        ] &&
+        data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128 && data.targetId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.targetLabel is string && data.targetLabel.size() >= 1 && data.targetLabel.size() <= 200 &&
+        data.note is string && data.note.size() <= 1000 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidSiteSettings(data) {
+      return data.keys().hasAll([
+          'siteName', 'siteDescription', 'logoText', 'logoUrl',
+          'announcement', 'announcementActive', 'categories',
+          'updatedBy', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'siteName', 'siteDescription', 'logoText', 'logoUrl',
+          'announcement', 'announcementActive', 'categories',
+          'updatedBy', 'updatedAt'
+        ]) &&
+        data.siteName is string && data.siteName.size() >= 2 && data.siteName.size() <= 100 &&
+        data.siteDescription is string && data.siteDescription.size() >= 5 && data.siteDescription.size() <= 500 &&
+        data.logoText is string && data.logoText.size() >= 1 && data.logoText.size() <= 40 &&
+        data.logoUrl is string && data.logoUrl.size() <= 1000 &&
+        data.announcement is string && data.announcement.size() <= 500 &&
+        data.announcementActive is bool &&
+        data.categories is list && data.categories.size() >= 1 && data.categories.size() <= 25 &&
+        data.categories[0] is string && data.categories[0].size() >= 1 && data.categories[0].size() <= 80 &&
+        data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128 && data.updatedBy.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.updatedAt is timestamp;
+    }
+
+    // =========================================================================
+    // Collection 1: /users/{userId}
+    // =========================================================================
+    match /users/{userId} {
+      // PII Isolation: Only owner or active staff can get a user document
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isStaff());
+      // Query Enforcer without get()/exists(): Bootstrapped admin listing active/suspended users
+      allow list: if isBootstrappedAdmin() && resource.data.status in ['active', 'suspended'];
+
+      allow create: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isValidUser(incoming()) &&
+        incoming().uid == request.auth.uid &&
+        incoming().uid == userId &&
+        incoming().status == 'active' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (incoming().role == 'member' || (incoming().role == 'admin' && isBootstrappedAdmin()));
+
+      allow update: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isValidUser(incoming()) && (
+          // Action 1: Owner updates personal profile fields
+          (
+            request.auth.uid == userId &&
+            existing().status == 'active' &&
+            incoming().uid == existing().uid &&
+            incoming().email == existing().email &&
+            incoming().role == existing().role &&
+            incoming().status == existing().status &&
+            incoming().createdAt == existing().createdAt &&
+            incoming().updatedAt == request.time &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'bio', 'updatedAt'])
+          ) ||
+          // Action 2: Admin updates user role or account status
+          (
+            isAdmin() &&
+            incoming().uid == existing().uid &&
+            incoming().email == existing().email &&
+            incoming().createdAt == existing().createdAt &&
+            incoming().updatedAt == request.time &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['role', 'status', 'updatedAt'])
+          )
+        );
+
+      allow delete: if false;
+    }
+
+    // =========================================================================
+    // Collection 2: /resources/{resourceId}
+    // =========================================================================
+    match /resources/{resourceId} {
+      allow get: if isValidId(resourceId) && (
+        resource.data.visibility == 'public' ||
+        (isSignedIn() && (resource.data.authorId == request.auth.uid || isStaff()))
+      );
+
+      allow list: if resource.data.visibility == 'public' ||
+        (isSignedIn() && (resource.data.authorId == request.auth.uid || isBootstrappedAdmin()));
+
+      allow create: if isVerifiedUser() &&
+        isValidId(resourceId) &&
+        isValidResource(incoming()) &&
+        incoming().authorId == request.auth.uid &&
+        incoming().visibility == 'public' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isActiveUser();
+
+      allow update: if isVerifiedUser() &&
+        isValidId(resourceId) &&
+        isValidResource(incoming()) && (
+          // Action 1: Author updates own resource content
+          (
+            request.auth.uid == existing().authorId &&
+            incoming().authorId == existing().authorId &&
+            incoming().visibility == existing().visibility &&
+            incoming().createdAt == existing().createdAt &&
+            incoming().updatedAt == request.time &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'description', 'category', 'level', 'mediaType',
+              'resourceUrl', 'fileName', 'fileSize', 'fileDataUrl',
+              'tags', 'authorName', 'updatedAt'
+            ]) &&
+            isActiveUser()
+          ) ||
+          // Action 2: Staff hides or restores resource visibility
+          (
+            incoming().authorId == existing().authorId &&
+            incoming().createdAt == existing().createdAt &&
+            incoming().updatedAt == request.time &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['visibility', 'updatedAt']) &&
+            isStaff()
+          )
+        );
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(resourceId) && (
+          (request.auth.uid == existing().authorId && isActiveUser()) ||
+          isStaff()
+        );
+    }
+
+    // =========================================================================
+    // Collection 3: /favorites/{favoriteId}
+    // =========================================================================
+    match /favorites/{favoriteId} {
+      allow get: if isSignedIn() && isValidId(favoriteId) && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(favoriteId) &&
+        isValidFavorite(incoming()) &&
+        incoming().userId == request.auth.uid &&
+        favoriteId == request.auth.uid + '_' + incoming().resourceId &&
+        incoming().createdAt == request.time &&
+        isActiveUser() &&
+        exists(/databases/$(database)/documents/resources/$(incoming().resourceId));
+
+      allow update: if false;
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(favoriteId) &&
+        existing().userId == request.auth.uid;
+    }
+
+    // =========================================================================
+    // Collection 4: /reports/{reportId}
+    // =========================================================================
+    match /reports/{reportId} {
+      allow get: if isSignedIn() && isValidId(reportId) && (
+        resource.data.reporterId == request.auth.uid || isStaff()
+      );
+
+      allow list: if isSignedIn() && (
+        resource.data.reporterId == request.auth.uid ||
+        (isBootstrappedAdmin() && resource.data.status in ['pending', 'resolved', 'dismissed'])
+      );
+
+      allow create: if isVerifiedUser() &&
+        isValidId(reportId) &&
+        isValidReport(incoming()) &&
+        incoming().reporterId == request.auth.uid &&
+        incoming().status == 'pending' &&
+        incoming().resolutionNote == '' &&
+        incoming().resolvedBy == '' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isActiveUser() &&
+        exists(/databases/$(database)/documents/resources/$(incoming().resourceId));
+
+      allow update: if isVerifiedUser() &&
+        isValidId(reportId) &&
+        isValidReport(incoming()) &&
+        // Terminal state locking: only pending reports can be updated unless overridden by Admin
+        (existing().status == 'pending' || isAdmin()) &&
+        incoming().resourceId == existing().resourceId &&
+        incoming().reporterId == existing().reporterId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'resolutionNote', 'resolvedBy', 'updatedAt']) &&
+        isStaff();
+
+      allow delete: if isVerifiedUser() && isValidId(reportId) && isAdmin();
+    }
+
+    // =========================================================================
+    // Collection 5: /moderationLogs/{logId}
+    // =========================================================================
+    match /moderationLogs/{logId} {
+      allow get: if isSignedIn() && isValidId(logId) && isStaff();
+      allow list: if isBootstrappedAdmin() && resource.data.actionType in [
+        'hide_resource', 'restore_resource', 'delete_resource',
+        'resolve_report', 'dismiss_report', 'suspend_user',
+        'activate_user', 'change_role', 'update_settings'
+      ];
+
+      allow create: if isVerifiedUser() &&
+        isValidId(logId) &&
+        isValidModerationLog(incoming()) &&
+        incoming().actorId == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        isStaff();
+
+      allow update, delete: if false;
+    }
+
+    // =========================================================================
+    // Collection 6: /settings/{settingId}
+    // =========================================================================
+    match /settings/{settingId} {
+      allow get: if isValidId(settingId) && settingId == 'site_config';
+      allow list: if false;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(settingId) &&
+        settingId == 'site_config' &&
+        isValidSiteSettings(incoming()) &&
+        incoming().updatedBy == request.auth.uid &&
+        incoming().updatedAt == request.time &&
+        isAdmin();
+
+      allow update: if isVerifiedUser() &&
+        isValidId(settingId) &&
+        settingId == 'site_config' &&
+        isValidSiteSettings(incoming()) &&
+        incoming().updatedBy == request.auth.uid &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'siteName', 'siteDescription', 'logoText', 'logoUrl',
+          'announcement', 'announcementActive', 'categories',
+          'updatedBy', 'updatedAt'
+        ]) &&
+        isAdmin();
+
+      allow delete: if false;
+    }
+  }
+}
